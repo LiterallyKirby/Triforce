@@ -5,8 +5,27 @@ return {
     dependencies = {
       "neovim/nvim-lspconfig",
       { "VonHeikemen/lsp-zero.nvim", branch = "v3.x" },
-      "hrsh7th/cmp-nvim-lsp",
+      
+      -- Enhanced nvim-cmp setup with more sources
       "hrsh7th/nvim-cmp",
+      "hrsh7th/cmp-nvim-lsp",
+      "hrsh7th/cmp-buffer",
+      "hrsh7th/cmp-path",
+      "hrsh7th/cmp-cmdline",
+      "hrsh7th/cmp-nvim-lua",
+      "hrsh7th/cmp-nvim-lsp-signature-help",
+      "hrsh7th/cmp-nvim-lsp-document-symbol",
+      "saadparwaiz1/cmp_luasnip",
+      
+      -- Snippet engine (required for cmp)
+      {
+        "L3MON4D3/LuaSnip",
+        version = "v2.*",
+        build = "make install_jsregexp",
+        dependencies = {
+          "rafamadriz/friendly-snippets",
+        },
+      },
 
       -- Enhanced syntax highlighting
       "nvim-treesitter/nvim-treesitter",
@@ -23,6 +42,9 @@ return {
 
       -- Enhanced diagnostics
       "folke/trouble.nvim",
+      
+      -- Better UI for completion
+      "onsails/lspkind.nvim",
     },
     config = function()
       local lsp_zero = require("lsp-zero")
@@ -60,12 +82,167 @@ return {
         return nil
       end
 
-      -- Enhanced LSP attach function
+      -- Setup LuaSnip first
+      local luasnip = require("luasnip")
+      require("luasnip.loaders.from_vscode").lazy_load()
+      
+      -- Custom snippet configuration
+      luasnip.config.setup({
+        history = true,
+        updateevents = "TextChanged,TextChangedI",
+        enable_autosnippets = true,
+      })
+
+      -- Enhanced nvim-cmp setup
+      local cmp = require("cmp")
+      local lspkind = require("lspkind")
+      
+      cmp.setup({
+        snippet = {
+          expand = function(args)
+            luasnip.lsp_expand(args.body)
+          end,
+        },
+        
+        window = {
+          completion = cmp.config.window.bordered({
+            border = "rounded",
+            winhighlight = "Normal:CmpPmenu,CursorLine:CmpSel,Search:None",
+          }),
+          documentation = cmp.config.window.bordered({
+            border = "rounded",
+            winhighlight = "Normal:CmpDoc",
+          }),
+        },
+        
+        formatting = {
+          format = lspkind.cmp_format({
+            mode = "symbol_text",
+            maxwidth = 50,
+            ellipsis_char = "...",
+            before = function(entry, vim_item)
+              -- Source indicator
+              vim_item.menu = ({
+                nvim_lsp = "[LSP]",
+                luasnip = "[Snip]",
+                buffer = "[Buf]",
+                path = "[Path]",
+                nvim_lua = "[Lua]",
+                nvim_lsp_signature_help = "[Sig]",
+                nvim_lsp_document_symbol = "[Sym]",
+              })[entry.source.name]
+              return vim_item
+            end,
+          }),
+        },
+        
+        mapping = cmp.mapping.preset.insert({
+          -- Enhanced navigation
+          ["<C-k>"] = cmp.mapping.select_prev_item({ behavior = cmp.SelectBehavior.Insert }),
+          ["<C-j>"] = cmp.mapping.select_next_item({ behavior = cmp.SelectBehavior.Insert }),
+          ["<C-u>"] = cmp.mapping.scroll_docs(-4),
+          ["<C-d>"] = cmp.mapping.scroll_docs(4),
+          ["<C-Space>"] = cmp.mapping.complete(),
+          ["<C-e>"] = cmp.mapping.abort(),
+          
+          -- Accept completion
+          ["<CR>"] = cmp.mapping.confirm({
+            behavior = cmp.ConfirmBehavior.Replace,
+            select = false,
+          }),
+          
+          -- Tab for snippet navigation and completion
+          ["<Tab>"] = cmp.mapping(function(fallback)
+            if cmp.visible() then
+              cmp.select_next_item()
+            elseif luasnip.expand_or_jumpable() then
+              luasnip.expand_or_jump()
+            else
+              fallback()
+            end
+          end, { "i", "s" }),
+          
+          ["<S-Tab>"] = cmp.mapping(function(fallback)
+            if cmp.visible() then
+              cmp.select_prev_item()
+            elseif luasnip.jumpable(-1) then
+              luasnip.jump(-1)
+            else
+              fallback()
+            end
+          end, { "i", "s" }),
+        }),
+        
+        sources = cmp.config.sources({
+          { name = "nvim_lsp", priority = 1000 },
+          { name = "nvim_lsp_signature_help", priority = 900 },
+          { name = "luasnip", priority = 800 },
+          { name = "nvim_lua", priority = 700 },
+        }, {
+          { name = "buffer", priority = 500, keyword_length = 3 },
+          { name = "path", priority = 400 },
+          { name = "nvim_lsp_document_symbol", priority = 300 },
+        }),
+        
+        experimental = {
+          ghost_text = {
+            hl_group = "CmpGhostText",
+          },
+        },
+        
+        completion = {
+          completeopt = "menu,menuone,noinsert",
+        },
+        
+        performance = {
+          debounce = 60,
+          throttle = 30,
+          fetching_timeout = 500,
+          confirm_resolve_timeout = 80,
+          async_budget = 1,
+          max_view_entries = 200,
+        },
+      })
+
+      -- Setup completion for command line
+      cmp.setup.cmdline({ "/", "?" }, {
+        mapping = cmp.mapping.preset.cmdline(),
+        sources = {
+          { name = "nvim_lsp_document_symbol" }
+        }
+      })
+
+      cmp.setup.cmdline(":", {
+        mapping = cmp.mapping.preset.cmdline(),
+        sources = cmp.config.sources({
+          { name = "path" }
+        }, {
+          { name = "cmdline" }
+        })
+      })
+
+      -- Enhanced LSP attach function with better keymaps
       lsp_zero.on_attach(function(client, bufnr)
         -- Enable semantic highlighting if supported
         if client.server_capabilities.semanticTokensProvider then
           vim.lsp.semantic_tokens.start(bufnr, client.id)
         end
+        
+        -- Enhanced LSP keymaps
+        local opts = { buffer = bufnr, silent = true }
+        
+        vim.keymap.set("n", "gd", vim.lsp.buf.definition, opts)
+        vim.keymap.set("n", "gD", vim.lsp.buf.declaration, opts)
+        vim.keymap.set("n", "gi", vim.lsp.buf.implementation, opts)
+        vim.keymap.set("n", "go", vim.lsp.buf.type_definition, opts)
+        vim.keymap.set("n", "gr", vim.lsp.buf.references, opts)
+        vim.keymap.set("n", "gs", vim.lsp.buf.signature_help, opts)
+        vim.keymap.set("n", "<F2>", vim.lsp.buf.rename, opts)
+        vim.keymap.set({"n", "x"}, "<F3>", function() vim.lsp.buf.format({async = true}) end, opts)
+        vim.keymap.set("n", "<F4>", vim.lsp.buf.code_action, opts)
+        vim.keymap.set("n", "gl", vim.diagnostic.open_float, opts)
+        vim.keymap.set("n", "[d", vim.diagnostic.goto_prev, opts)
+        vim.keymap.set("n", "]d", vim.diagnostic.goto_next, opts)
       end)
 
       -- Setup lazy-lsp with enhanced configuration
@@ -89,9 +266,13 @@ return {
           cpp = { "clangd" },
         },
 
-        -- Default configuration for all servers
+        -- Default configuration for all servers with enhanced capabilities
         default_config = {
-          capabilities = lsp_zero.get_capabilities(),
+          capabilities = vim.tbl_deep_extend(
+            "force",
+            lsp_zero.get_capabilities(),
+            require("cmp_nvim_lsp").default_capabilities()
+          ),
         },
 
         -- Server-specific configurations
@@ -106,6 +287,9 @@ return {
                   checkThirdParty = false,
                 },
                 telemetry = { enable = false },
+                completion = {
+                  callSnippet = "Replace",
+                },
               },
             },
           },
@@ -116,10 +300,25 @@ return {
                 preferences = {
                   includePackageJsonAutoImports = "auto",
                 },
+                suggest = {
+                  includeCompletionsForModuleExports = true,
+                },
+                inlayHints = {
+                  includeInlayParameterNameHints = "all",
+                  includeInlayParameterNameHintsWhenArgumentMatchesName = false,
+                  includeInlayFunctionParameterTypeHints = true,
+                  includeInlayVariableTypeHints = true,
+                  includeInlayPropertyDeclarationTypeHints = true,
+                  includeInlayFunctionLikeReturnTypeHints = true,
+                  includeInlayEnumMemberValueHints = true,
+                },
               },
               javascript = {
                 preferences = {
                   includePackageJsonAutoImports = "auto",
+                },
+                suggest = {
+                  includeCompletionsForModuleExports = true,
                 },
               },
             },
@@ -132,6 +331,7 @@ return {
                   typeCheckingMode = "basic",
                   autoSearchPaths = true,
                   useLibraryCodeForTypes = true,
+                  completeFunctionParens = true,
                 },
               },
             },
@@ -146,7 +346,74 @@ return {
                 checkOnSave = {
                   command = "clippy",
                 },
+                completion = {
+                  addCallParentheses = true,
+                  addCallArgumentSnippets = true,
+                },
+                inlayHints = {
+                  bindingModeHints = {
+                    enable = false,
+                  },
+                  chainingHints = {
+                    enable = true,
+                  },
+                  closingBraceHints = {
+                    enable = true,
+                    minLines = 25,
+                  },
+                  closureReturnTypeHints = {
+                    enable = "never",
+                  },
+                  lifetimeElisionHints = {
+                    enable = "never",
+                    useParameterNames = false,
+                  },
+                  maxLength = 25,
+                  parameterHints = {
+                    enable = true,
+                  },
+                  reborrowHints = {
+                    enable = "never",
+                  },
+                  renderColons = true,
+                  typeHints = {
+                    enable = true,
+                    hideClosureInitialization = false,
+                    hideNamedConstructor = false,
+                  },
+                },
               },
+            },
+          },
+
+          gopls = {
+            settings = {
+              gopls = {
+                completeUnimported = true,
+                usePlaceholders = true,
+                analyses = {
+                  unusedparams = true,
+                },
+                staticcheck = true,
+                gofumpt = true,
+              },
+            },
+          },
+
+          clangd = {
+            cmd = {
+              "clangd",
+              "--background-index",
+              "--clang-tidy",
+              "--header-insertion=iwyu",
+              "--completion-style=detailed",
+              "--function-arg-placeholders",
+              "--fallback-style=llvm",
+            },
+            init_options = {
+              usePlaceholders = true,
+              completeUnimported = true,
+              clangdFileStatus = true,
             },
           },
 
